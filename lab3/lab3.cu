@@ -52,6 +52,23 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C,
   }
 }
 
+// This function serves as an implementation of lab2
+__global__ void matrixMultiply_not_tiled(float *A, float *B, float *C,
+                                     int numARows, int numAColumns,
+                                     int numBRows, int numBColumns,
+                                     int numCRows, int numCColumns) {
+  int Row = blockIdx.y * blockDim.y + threadIdx.y;
+  int Col = blockIdx.x * blockDim.x + threadIdx.x;
+  if (Row < numCRows && Col < numCColumns) {
+    float Pvalue = 0;
+    for (int k = 0; k < numAColumns; ++k) {
+      Pvalue += A[Row * numAColumns + k] * B[k * numBColumns + Col];
+    }
+    C[Row * numCColumns + Col] = Pvalue;
+  }
+}
+
+
 int main(int argc, char **argv) {
   wbArg_t args;
   float *hostA; // The A matrix
