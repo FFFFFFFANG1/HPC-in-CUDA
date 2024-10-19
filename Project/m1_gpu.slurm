@@ -7,7 +7,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --constraint="projects,perf,nvperf"
+#SBATCH --constraint="projects"
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bche-delta-gpu
@@ -19,9 +19,9 @@ module load cuda
 echo -e "job $SLURM_JOBID is starting on `hostname`\n\n"
 
 # srun ./m1_gpu 100 > m1_gpu.out
-# { time srun ./m1_gpu 10000 > m1_gpu_10000.out; } 2> time_gpu10000.out
+{ time srun ./m1_gpu 10000 > m1_gpu_10000.out; } 2> time_gpu10000.out
 # /bin/bash -c "cuda-memcheck ./m1_gpu"
 
 # Generate nsys profile information, output will be in profile.out
 # srun nsys profile --stats=true ./m1_gpu > profile.out
-srun ncu -f --set full -o analysis_file ./m1_gpu 10000 > ncu.out    
+# srun ncu -f --set full -o analysis_file ./m1_gpu 10000 > ncu.out    
