@@ -20,11 +20,21 @@
 
 
 __global__ void add(float* input1, float *prev_sum, int len) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (blockIdx.x > 0 && i < len) {
-    input1[i] += prev_sum[blockIdx.x - 1];
+  __shared__ float prev;
+  int tx = threadIdx.x;
+  int start = 2 * blockIdx.x * blockDim.x;
+  if (blockIdx.x > 0) {
+    if (tx == 0) {
+      prev = prev_sum[blockIdx.x - 1];
+    }
+    __syncthreads();
+    if (start + tx < len) {
+      input1[start + tx] += prev;
+    }
+    if (start + blockDim.x + tx < len) {
+      input1[start + blockDim.x + tx] += prev;
+    }
   }
-
 }
 
 
@@ -32,37 +42,53 @@ __global__ void scan(float *input, float *output, float* prev_sum, int len) {
   //@@ Modify the body of this function to complete the functionality of
   //@@ the scan on the device
   //@@ You may need multiple kernel calls; write your kernels before this
-  //@@ function and call them from the host
-  __shared__ float T0[BLOCK_SIZE];
-  __shared__ float T1[BLOCK_SIZE];
+  __shared__ float T[2 * BLOCK_SIZE];
+  int start = 2 * blockIdx.x * blockDim.x;
+  int tx = threadIdx.x;
+  int stride;
 
-  float* src = T0;
-  float* dst = T1;
-  float* tmp;
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < len) {
-    T0[threadIdx.x] = input[i];
-    T1[threadIdx.x] = T0[threadIdx.x];
-  
+  if (start + tx < len) {
+    T[tx] = input[start + tx];
+  } else {
+    T[tx] = 0;
+  }
+  if (start + blockDim.x + tx < len) {
+    T[blockDim.x + tx] = input[start + blockDim.x + tx];
+  } else {
+    T[blockDim.x + tx] = 0;
+  }
+
+  stride = 1;
+  while (stride < 2 * blockDim.x) {
     __syncthreads();
-
-    for (unsigned int stride = 1; stride < blockDim.x; stride *= 2) {
-      __syncthreads();
-      if (threadIdx.x >= stride) {
-        dst[threadIdx.x] = src[threadIdx.x - stride] + src[threadIdx.x];
-      } else {
-        dst[threadIdx.x] = src[threadIdx.x];
-      }
-      tmp = src;
-      src = dst;
-      dst = tmp;
+    int index = (tx + 1) * stride * 2 - 1;
+    if (index < 2 * blockDim.x) {
+      T[index] += T[index - stride];
     }
-    output[i] = src[threadIdx.x];
+    stride *= 2;
   }
-  if (prev_sum != NULL && threadIdx.x == 0) {
-    prev_sum[blockIdx.x] = src[blockDim.x - 1];
+
+  stride = blockDim.x / 2;
+  while (stride > 0) {
+    __syncthreads();
+    int index = (tx + 1) * stride * 2 - 1;
+    if (index + stride < 2 * blockDim.x) {
+      T[index + stride] += T[index];
+    }
+    stride /= 2;
   }
-}
+
+  __syncthreads();
+  if (start + tx < len) {
+    output[start + tx] = T[tx];
+  }
+  if (start + blockDim.x + tx < len) {
+    output[start + blockDim.x + tx] = T[blockDim.x + tx];
+  }
+  if (prev_sum != NULL && tx == 0) {
+    prev_sum[blockIdx.x] = T[2 * blockDim.x - 1];
+  }
+} 
 
 
 
@@ -80,7 +106,7 @@ int main(int argc, char **argv) {
   // Import data and create memory on host
   // The number of input elements in the input is numElements
   hostInput = (float *)wbImport(wbArg_getInputFile(args, 0), &numElements);
-  int numBlocks = ceil(numElements/(float)BLOCK_SIZE);
+  int numBlocks = ceil(numElements/(float)(BLOCK_SIZE*2));
   hostOutput = (float *)malloc(numElements * sizeof(float));
 
 
@@ -100,12 +126,13 @@ int main(int argc, char **argv) {
   //@@ Initialize the grid and block dimensions here
   dim3 DimGrid(numBlocks, 1, 1);
   dim3 DimBlock(BLOCK_SIZE, 1, 1);
+  dim3 DimGrid_Add(1, 1, 1);
 
   //@@ Modify this to complete the functionality of the scan
   //@@ on the deivce
   scan<<<DimGrid, DimBlock>>>(deviceInput, deviceOutput, devicePrev_sum, numElements);
   if (numBlocks > 1) {
-    scan<<<1, numBlocks>>>(devicePrev_sum, devicePrev_sum, NULL, numBlocks);
+    scan<<<DimGrid_Add, DimBlock>>>(devicePrev_sum, devicePrev_sum, NULL, numBlocks);
     add<<<DimGrid, DimBlock>>>(deviceOutput, devicePrev_sum, numElements);
   }
   
