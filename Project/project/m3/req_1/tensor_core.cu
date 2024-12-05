@@ -1,6 +1,9 @@
+// #define __CUDA_ARCH__ 1180
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
+#include <mma.h>
+using namespace nvcuda;
 
 #define TILE_WIDTH 16
 #define BLOCK_SIZE 256
@@ -73,37 +76,48 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
                                      int numBRows, int numBColumns,
                                      int numCRows, int numCColumns)
 {
-    __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
-    __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    __shared__ half tileA[TILE_WIDTH][TILE_WIDTH];
+    __shared__ half tileB[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float tileC[TILE_WIDTH][TILE_WIDTH];
 
     int by = blockIdx.y, bx = blockIdx.x, ty = threadIdx.y, tx = threadIdx.x;
 
     int row = by * TILE_WIDTH + ty, col = bx * TILE_WIDTH + tx;
-    float val = 0;
 
     for (int tileId = 0; tileId < (numAColumns - 1) / TILE_WIDTH + 1; tileId++) {
         if (row < numARows && tileId * TILE_WIDTH + tx < numAColumns) {
-            tileA[ty][tx] = A[(size_t) row * numAColumns + tileId * TILE_WIDTH + tx];
+            tileA[ty][tx] = __float2half(A[(size_t) row * numAColumns + tileId * TILE_WIDTH + tx]);
         } else {
-            tileA[ty][tx] = 0;
+            tileA[ty][tx] = __float2half(0.0f);
         }
         if (col < numBColumns && tileId * TILE_WIDTH + ty < numBRows) {
-            tileB[ty][tx] = B[((size_t) tileId * TILE_WIDTH + ty) * numBColumns + col];
+            tileB[ty][tx] = __float2half(B[(size_t) (tileId * TILE_WIDTH + ty) * numBColumns + col]);
         } else {
-            tileB[ty][tx] = 0;
+            tileB[ty][tx] = __float2half(0.0f);
         }
         __syncthreads();
 
-        if (row < numCRows && col < numCColumns) {
-            for (int i = 0; i < TILE_WIDTH; i++) {
-                val += tileA[ty][i] * tileB[i][tx];
-            }
+        if (ty == 0 || ty == 1){  // use one warp
+            wmma::load_matrix_sync(a_frag, (half*)tileA, TILE_WIDTH);
+            wmma::load_matrix_sync(b_frag, (half*)tileB, TILE_WIDTH);
+            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
         }
         __syncthreads();
     }
 
+    if (ty == 0 || ty == 1){
+        wmma::store_matrix_sync((float*)tileC, c_frag, TILE_WIDTH, wmma::mem_row_major);
+    }
+    __syncthreads();
+    
     if (row < numCRows && col < numCColumns) {
-        C[row * numCColumns + col] = val;
+        C[(size_t) row * numCColumns + col] = tileC[ty][tx];
     }
 }
 
@@ -111,7 +125,6 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
 // The output feature map after matmul is of shape Map_out x Batch x Height_out x Width_out,
 // and we need to permute it into Batch x Map_out x Height_out x Width_out.
 // You don't need to modify this kernel.
-// final output dimension (Batch, Map_out, Height_out * Width_out)
 __global__ void matrix_permute_kernel(const float *input, float *output, int Map_out,
                                       int Batch, int image_size) {
     int b = blockIdx.y;

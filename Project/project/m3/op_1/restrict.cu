@@ -15,7 +15,7 @@
     } while(0)
 
 
-__global__ void matrix_unrolling_kernel(const float *input, float *output,
+__global__ void matrix_unrolling_kernel(const float * __restrict__ input, float * __restrict__ output,
                                         const int Batch, const int Channel,
                                         const int Height, const int Width,
                                         const int K) {
@@ -68,7 +68,7 @@ __global__ void matrix_unrolling_kernel(const float *input, float *output,
 
 // Tiled matrix multiplication kernel. Computes C = AB
 // You don't need to modify this kernel.
-__global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
+__global__ void matrixMultiplyShared(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ C,
                                      int numARows, int numAColumns,
                                      int numBRows, int numBColumns,
                                      int numCRows, int numCColumns)
@@ -112,7 +112,7 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
 // and we need to permute it into Batch x Map_out x Height_out x Width_out.
 // You don't need to modify this kernel.
 // final output dimension (Batch, Map_out, Height_out * Width_out)
-__global__ void matrix_permute_kernel(const float *input, float *output, int Map_out,
+__global__ void matrix_permute_kernel(const float * __restrict__ input, float * __restrict__ output, int Map_out,
                                       int Batch, int image_size) {
     int b = blockIdx.y;
     int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;

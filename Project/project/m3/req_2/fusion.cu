@@ -1,8 +1,6 @@
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
-#include <mma.h>
-using namespace nvcuda;
 
 #define TILE_WIDTH 16
 #define BLOCK_SIZE 256
@@ -17,36 +15,26 @@ using namespace nvcuda;
     } while(0)
 
 
-__global__ void conv_forward_kernel (const float * __restrict__ input, const float * __restrict__ mask, float * __restrict__ output, const int Batch, 
+__global__ void conv_forward_kernel (const float *input, const float *mask, float *output, const int Batch, 
                                         const int Map_out, const int Channel, const int Height, const int Width, const int K){
     const int Height_out = Height - K + 1;
     const int Width_out = Width - K + 1;                                        
     #define in_4d(i3, i2, i1, i0) input[(i3) * (Channel * Height * Width) + (i2) * (Height * Width) + (i1) * (Width) + i0]
     #define out_4d(i3, i2, i1, i0) output[(i3) * (Map_out * Height_out * Width_out) + (i2) * (Height_out * Width_out) + (i1) * Width_out + i0]
 
-    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
-    wmma::fill_fragment(c_frag, 0.0f);
-
-    __shared__ half input_tile[TILE_WIDTH][TILE_WIDTH];
-    __shared__ half mask_tile[TILE_WIDTH][TILE_WIDTH];
-    __shared__ float output_tile[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float input_tile[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float mask_tile[TILE_WIDTH][TILE_WIDTH];
     
-    //unroll
     int batch_idx = blockIdx.z;
     int col = blockIdx.x * TILE_WIDTH + threadIdx.x; // pixel
     int row = blockIdx.y * TILE_WIDTH + threadIdx.y; // map
-
-    //matmul
     int numAColumns = Channel * K * K;
     int numBColumns = Height_out * Width_out;
     int h = col / Width_out;
     int w = col % Width_out;
     int mask_size = K * K;
-    int ty = threadIdx.y;
 
-    #pragma unroll
+    float Cvalue = 0;
     for (int tileId = 0; tileId < ceil(numAColumns / (TILE_WIDTH * 1.0)); tileId++) {
         int colA = tileId * TILE_WIDTH + threadIdx.x;
         int rowB = tileId * TILE_WIDTH + threadIdx.y;
@@ -54,30 +42,24 @@ __global__ void conv_forward_kernel (const float * __restrict__ input, const flo
         int p = (rowB % mask_size) / K;
         int q = (rowB % mask_size) % K;
         if (row < Map_out && colA < numAColumns) {
-            mask_tile[threadIdx.y][threadIdx.x] = __float2half(mask[row * numAColumns + tileId * TILE_WIDTH + threadIdx.x]);
+            mask_tile[threadIdx.y][threadIdx.x] = mask[row * numAColumns + colA];
         } else {
-            mask_tile[threadIdx.y][threadIdx.x] = __float2half(0.0f);
+            mask_tile[threadIdx.y][threadIdx.x] = 0;
         }
         if (col < numBColumns && rowB < numAColumns) {
-            input_tile[threadIdx.y][threadIdx.x] = __float2half(in_4d(batch_idx, c, h + p, w + q));
+            input_tile[threadIdx.y][threadIdx.x] = in_4d(batch_idx, c, h + p, w + q);
         } else {
-            input_tile[threadIdx.y][threadIdx.x] = __float2half(0.0f);
+            input_tile[threadIdx.y][threadIdx.x] = 0;
         }
         __syncthreads();
-        if (ty == 0 || ty == 1){  // use one warp
-            wmma::load_matrix_sync(a_frag, (half*)mask_tile, TILE_WIDTH);
-            wmma::load_matrix_sync(b_frag, (half*)input_tile, TILE_WIDTH);
-            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        for (int i = 0; i < TILE_WIDTH; i++) {
+            Cvalue += mask_tile[threadIdx.y][i] * input_tile[i][threadIdx.x];
         }
         __syncthreads();
     }
-    if (ty == 0 || ty == 1){
-        wmma::store_matrix_sync((float*)output_tile, c_frag, TILE_WIDTH, wmma::mem_row_major);
-    }
-    __syncthreads();
-    
+
     if (row < Map_out && col < numBColumns) {
-        out_4d(batch_idx, row, h, w) = output_tile[threadIdx.y][threadIdx.x];
+        out_4d(batch_idx, row, h, w) = Cvalue;
     }
     #undef in_4d
     #undef out_4d
@@ -98,13 +80,12 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 
 
 
-
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     const int Height_out = Height - K + 1;
     const int Width_out = Width - K + 1;    
 
-    // image size * map out * batch
+    // batch x feature maps x image size
     dim3 grid_dim(ceil((Height_out * Width_out) / (1.0 * TILE_WIDTH)), ceil(Map_out / (TILE_WIDTH * 1.0)), Batch);
     dim3 block_dim(TILE_WIDTH, TILE_WIDTH, 1);
     conv_forward_kernel<<<grid_dim, block_dim>>>(device_input, device_mask, device_output, Batch, Map_out, Channel, Height, Width, K);

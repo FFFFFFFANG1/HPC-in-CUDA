@@ -5,7 +5,6 @@
 #define TILE_WIDTH 16
 #define BLOCK_SIZE 256
 
-
 #define wbcheck(stmt) do {                                                    \
         if (stmt != cudaSuccess) {                                             \
             std::cout<<"Failed to run stmt "<<#stmt<<std::endl;                       \
@@ -111,7 +110,6 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
 // The output feature map after matmul is of shape Map_out x Batch x Height_out x Width_out,
 // and we need to permute it into Batch x Map_out x Height_out x Width_out.
 // You don't need to modify this kernel.
-// final output dimension (Batch, Map_out, Height_out * Width_out)
 __global__ void matrix_permute_kernel(const float *input, float *output, int Map_out,
                                       int Batch, int image_size) {
     int b = blockIdx.y;
@@ -138,57 +136,131 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
     //     exit(-1);
     // }
+    int num_streams = 5;
+    int seg_batch = 20;
+    cudaStream_t streams[num_streams];
+    for (int i = 0; i < num_streams; ++i) {
+        cudaStreamCreate(&streams[i]);
+    }
+     
     int Height_out = Height - K + 1;
     int Width_out = Width - K + 1;
+    const int Height_unrolled = Channel * K * K;
+    const size_t Width_unrolled = seg_batch * Height_out * Width_out;
+    
+    int seg_size_input = Channel * Height * Width;
+    int seg_size_output = Map_out * Height_out * Width_out;
+
     cudaMalloc(device_output_ptr, (size_t) Batch * Map_out * Height_out * Width_out * sizeof(float));
     cudaMalloc(device_input_ptr, (size_t) Batch * Channel * Height * Width * sizeof(float));
     cudaMalloc(device_mask_ptr, (size_t) Map_out * Channel * K * K * sizeof(float));
-
-    cudaMemcpy(*device_input_ptr, host_input, (size_t) Batch * Channel * Height * Width * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(*device_mask_ptr, host_mask, (size_t) Map_out * Channel * K * K * sizeof(float), cudaMemcpyHostToDevice);
+    // float *unrolled_matrix; 
+    // float *matmul_output;    
+    // cudaMalloc((void**)&unrolled_matrix, (size_t) Batch * Channel * K * K * Height_out * Width_out * sizeof(float)); //todo: malloc it in epoch
+    // cudaMalloc((void**)&matmul_output, (Batch * Map_out * Height_out * Width_out) * sizeof(float));
+
+    int epoch = Batch / seg_batch / num_streams; 
+
+    for (int i = 0; i < epoch; i ++) {
+        float* unrolled_matrix[num_streams];
+        float* matmul_output[num_streams];
+        for (int j = 0; j < num_streams; j++) {
+            cudaMalloc(&unrolled_matrix[j], (size_t) seg_batch * Channel * K * K * Height_out * Width_out * sizeof(float));
+            cudaMalloc(&matmul_output[j], (seg_batch * Map_out * Height_out * Width_out) * sizeof(float));
+        }
+
+        for (int j = 0; j < num_streams; j++) {
+            int start = i * seg_batch * num_streams + j * seg_batch;
+            cudaMemcpyAsync(*device_input_ptr + start * seg_size_input, host_input + start * seg_size_input, seg_batch * seg_size_input * sizeof(float), cudaMemcpyHostToDevice, streams[j]);
+        }
+        
+        // TODO: Set the kernel dimensions and call the matrix unrolling kernel.
+        dim3 grid_unroll_dim(seg_batch, ((Height_out - 1) / TILE_WIDTH + 1) * ((Width_out - 1) / TILE_WIDTH + 1), Channel);
+        dim3 block_dim(TILE_WIDTH, TILE_WIDTH, 1);
+        for (int j = 0; j < num_streams; j++) {
+            int start = i * seg_batch * num_streams + j * seg_batch;
+            matrix_unrolling_kernel<<<grid_unroll_dim, block_dim, 0, streams[j]>>>(*device_input_ptr + start * seg_size_input, unrolled_matrix[j], seg_batch, Channel, Height, Width, K);
+        }
+
+        // TODO: Set the kernel dimensions and call the matmul kernel
+        int mask_width = Channel * K * K;
+        int mask_height = Map_out;
+        dim3 grid_matmul_dim((Width_unrolled - 1) / TILE_WIDTH + 1, (mask_height - 1) / TILE_WIDTH + 1, 1);
+        for (int j = 0; j < num_streams; j++) {
+            // int start = i * seg_batch * num_streams + j * seg_batch;
+            matrixMultiplyShared<<<grid_matmul_dim, block_dim, 0, streams[j]>>>(*device_mask_ptr, unrolled_matrix[j], matmul_output[j], mask_height, mask_width, Height_unrolled, Width_unrolled, mask_height, Width_unrolled);
+        }
+        
+        // Permute the result of matrix multiplication
+        const int out_image_size = Height_out * Width_out;
+        dim3 permute_kernel_grid_dim((out_image_size - 1) / BLOCK_SIZE + 1, seg_batch, 1);
+        for (int j = 0; j < num_streams; j++) {
+            int start = i * seg_batch * num_streams + j * seg_batch;
+            matrix_permute_kernel<<<permute_kernel_grid_dim, BLOCK_SIZE, 0, streams[j]>>>(
+                matmul_output[j], *device_output_ptr + start * seg_size_output, Map_out, seg_batch, out_image_size
+            );
+        }
+
+        for (int j = 0; j < num_streams; j++) {
+            int start = i * seg_batch * num_streams + j * seg_batch;
+            cudaMemcpyAsync((float*)host_output + start * seg_size_output, *device_output_ptr + start * seg_size_output, seg_batch * seg_size_output * sizeof(float), cudaMemcpyDeviceToHost, streams[j]);
+        }
+
+        for (int j = 0; j < num_streams; j++) {
+            cudaFree(unrolled_matrix[j]);
+            cudaFree(matmul_output[j]);
+        }
+    }
+
+    for (int i = 0; i < num_streams; ++i) {
+        cudaStreamSynchronize(streams[i]);
+        cudaStreamDestroy(streams[i]);
+    }
+
 }
 
 
 
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
-    const int Height_out = Height - K + 1;
-    const int Width_out = Width - K + 1;
-    const int Height_unrolled = Channel * K * K;
-    const size_t Width_unrolled = Batch * Height_out * Width_out;
+    // const int Height_out = Height - K + 1;
+    // const int Width_out = Width - K + 1;
+    // const int Height_unrolled = Channel * K * K;
+    // const size_t Width_unrolled = Batch * Height_out * Width_out;
 
-    float *unrolled_matrix;  // Pointer to device memory for storing the unrolled matrix
-    float *matmul_output;    // Pointer to device memory for storing the result of matrix multiplication
-    cudaMalloc((void**)&unrolled_matrix, (size_t) Batch * Channel * K * K * Height_out * Width_out * sizeof(float));
-    cudaMalloc((void**)&matmul_output, (Batch * Map_out * Height_out * Width_out) * sizeof(float));
+    // float *unrolled_matrix;  // Pointer to device memory for storing the unrolled matrix
+    // float *matmul_output;    // Pointer to device memory for storing the result of matrix multiplication
+    // cudaMalloc((void**)&unrolled_matrix, (size_t) Batch * Channel * K * K * Height_out * Width_out * sizeof(float));
+    // cudaMalloc((void**)&matmul_output, (Batch * Map_out * Height_out * Width_out) * sizeof(float));
 
-    // TODO: Set the kernel dimensions and call the matrix unrolling kernel.
-    dim3 grid_unroll_dim(Batch, ((Height_out - 1) / TILE_WIDTH + 1) * ((Width_out - 1) / TILE_WIDTH + 1), Channel);
-    dim3 block_dim(TILE_WIDTH, TILE_WIDTH, 1);
-    matrix_unrolling_kernel<<<grid_unroll_dim, block_dim>>>(device_input, unrolled_matrix, Batch, Channel, Height, Width, K);
+    // // TODO: Set the kernel dimensions and call the matrix unrolling kernel.
+    // dim3 grid_unroll_dim(Batch, ((Height_out - 1) / TILE_WIDTH + 1) * ((Width_out - 1) / TILE_WIDTH + 1), Channel);
+    // dim3 block_dim(TILE_WIDTH, TILE_WIDTH, 1);
+    // matrix_unrolling_kernel<<<grid_unroll_dim, block_dim>>>(device_input, unrolled_matrix, Batch, Channel, Height, Width, K);
 
-    // TODO: Set the kernel dimensions and call the matmul kernel
-    int mask_width = Channel * K * K;
-    int mask_height = Map_out;
-    dim3 grid_matmul_dim((Width_unrolled - 1) / TILE_WIDTH + 1, (mask_height - 1) / TILE_WIDTH + 1, 1);
-    matrixMultiplyShared<<<grid_matmul_dim, block_dim>>>(device_mask, unrolled_matrix, matmul_output, mask_height, mask_width, Height_unrolled, Width_unrolled, mask_height, Width_unrolled);
+    // // TODO: Set the kernel dimensions and call the matmul kernel
+    // int mask_width = Channel * K * K;
+    // int mask_height = Map_out;
+    // dim3 grid_matmul_dim((Width_unrolled - 1) / TILE_WIDTH + 1, (mask_height - 1) / TILE_WIDTH + 1, 1);
+    // matrixMultiplyShared<<<grid_matmul_dim, block_dim>>>(device_mask, unrolled_matrix, matmul_output, mask_height, mask_width, Height_unrolled, Width_unrolled, mask_height, Width_unrolled);
     
-    // Permute the result of matrix multiplication
-    const int out_image_size = Height_out * Width_out;
-    dim3 permute_kernel_grid_dim((out_image_size - 1) / BLOCK_SIZE + 1, Batch, 1);
-    matrix_permute_kernel<<<permute_kernel_grid_dim, BLOCK_SIZE>>>(
-        matmul_output, device_output, Map_out, Batch, out_image_size
-    );
+    // // Permute the result of matrix multiplication
+    // const int out_image_size = Height_out * Width_out;
+    // dim3 permute_kernel_grid_dim((out_image_size - 1) / BLOCK_SIZE + 1, Batch, 1);
+    // matrix_permute_kernel<<<permute_kernel_grid_dim, BLOCK_SIZE>>>(
+    //     matmul_output, device_output, Map_out, Batch, out_image_size
+    // );
 
-    cudaFree(matmul_output);
-    cudaFree(unrolled_matrix);
+    // cudaFree(matmul_output);
+    // cudaFree(unrolled_matrix);
 }
 
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int Batch, const int Map_out, const int Channel, const int Height, const int Width, const int K)
 {
     // TODO: Copy the output back to host
-    cudaMemcpy(host_output, device_output, (size_t) Batch * Map_out * (Height - K + 1) * (Width - K + 1) * sizeof(float), cudaMemcpyDeviceToHost);
+    // cudaMemcpy(host_output, device_output, (size_t) Batch * Map_out * (Height - K + 1) * (Width - K + 1) * sizeof(float), cudaMemcpyDeviceToHost);
     // TODO: Free device memory
     cudaFree(device_output);
     cudaFree(device_input);

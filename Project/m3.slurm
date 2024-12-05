@@ -18,12 +18,15 @@ module load cuda
 
 echo -e "job $SLURM_JOBID is starting on `hostname`\n\n"
 
-{ time srun ./m3 100 > m3_100.out; } 2> time_m3_100.out
-{ time srun ./m3 1000 > m3_1000.out; } 2> time_m3_1000.out
+# { time srun ./m3 100 > m3_100.out; } 2> time_m3_100.out
+# { time srun ./m3 1000 > m3_1000.out; } 2> time_m3_1000.out
+# { time srun ./m3 10000 > m3_10000.out; } 2> time_m3_10000.out
+srun ./m3 10000 > m3_test.out;
 
+# # Generate nsys profile information, output will be in profile.out
+# srun nsys profile --stats=true ./m3 > profile_half.out
 
-# Generate nsys profile information, output will be in profile.out
-# srun nsys profile --stats=true ./m3 > profile_stream.out
+# # Generate analysis_file.ncu-rep with a detailed profiling result
+# ncu --set full -f -o analysis_file ./m3 > m3_half.out
 
-# Generate analysis_file.ncu-rep with a detailed profiling result
-# ncu --set full -f -o analysis_file ./m3 > m3_stream.out
+# perf,nvperf

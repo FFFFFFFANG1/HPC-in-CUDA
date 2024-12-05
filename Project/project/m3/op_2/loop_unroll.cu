@@ -52,7 +52,9 @@ __global__ void matrix_unrolling_kernel(const float *input, float *output,
     int w_out = (blockIdx.y % num_tile_w) * TILE_WIDTH + threadIdx.x;
     if (h_out < Height_out && w_out < Width_out) {
         int out_col = b * Height_out * Width_out + h_out * Width_out + w_out;
+        #pragma unroll
         for (int p = 0; p < K; ++p) {
+            #pragma unroll
             for (int q = 0; q < K; ++q) {
                 int in_row = h_out + p;
                 int in_col = w_out + q;
@@ -81,6 +83,7 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
     int row = by * TILE_WIDTH + ty, col = bx * TILE_WIDTH + tx;
     float val = 0;
 
+    #pragma unroll
     for (int tileId = 0; tileId < (numAColumns - 1) / TILE_WIDTH + 1; tileId++) {
         if (row < numARows && tileId * TILE_WIDTH + tx < numAColumns) {
             tileA[ty][tx] = A[(size_t) row * numAColumns + tileId * TILE_WIDTH + tx];
@@ -117,6 +120,7 @@ __global__ void matrix_permute_kernel(const float *input, float *output, int Map
     int b = blockIdx.y;
     int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (x < image_size) {
+        #pragma unroll
         for (int m = 0; m < Map_out; m++) {
             output[b * Map_out * image_size + m * image_size + x] =
                     input[m * Batch * image_size + b * image_size + x];
