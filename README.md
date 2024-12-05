@@ -3,10 +3,10 @@
 The repo includes all my implementation of parallel programming in CUDA. Labs are weekly assignments aiming for practice. The CUDA LeNet is the course final project.
 
 ## CUDA LeNet Implementation & Optimization
-Course final project for ECE 408 FA23 @ UIUC. For original project description, see [_README.md](Cuda LeNet/README.md).
+Course final project for ECE 408 FA23 @ UIUC. For original project description, see [Cuda LeNet/README.md](_README.md).
 
-## Optimization Techniques
-For a more comprehensive discussion, see [report.pdf](Cuda LeNet/report.pdf). Below is a table of optimization techniques:
+### Optimization Techniques
+For a more comprehensive discussion, see [Cuda LeNet/report.pdf](report.pdf). Below is a table of optimization techniques:
 | Name                | Techiques                    |
 | --------------------------- | ---------------------- |
 | Req 0 | Stream |
