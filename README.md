@@ -2,6 +2,21 @@
 
 The repo includes all my implementation of parallel programming in CUDA. Labs are weekly assignments aiming for practice. The CUDA LeNet is the course final project.
 
+## CUDA LeNet Implementation & Optimization
+Course final project for ECE 408 FA23 @ UIUC. For original project description, see [_README.md](Cuda LeNet/README.md).
+
+## Optimization Techniques
+For a more comprehensive discussion, see [report.pdf](Cuda LeNet/report.pdf). Below is a table of optimization techniques:
+| Name                | Techiques                    |
+| --------------------------- | ---------------------- |
+| Req 0 | Stream |
+| Req 1 | Tensor Core |
+| Req 2 | Kernel Fusion |
+| Op 1 | __restrict__ |
+| Op 2 | loop unrolling |
+| Op 5 | FP16 Operation |
+
+
 ## Labs
 
 Here is a list of techiques included in labs:
