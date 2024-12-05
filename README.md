@@ -1,5 +1,13 @@
-# ECE 408 / CS 483 / CSE 408 (fa24) repo for NetID: junzhou5
+# All works for ECE408
 
-GitHub username at initialization time: FFFFFFFANG1
+The repo includes all my implementation of parallel programming in CUDA. Labs are weekly assignments aiming for practice. The CUDA LeNet is the course final project.
 
-For next steps, please refer to the instructions provided by your course.
+## Labs
+
+Here is a list of techiques included in labs:
+
+| Name                 | Techiques                    |
+| --------------------------- | ---------------------- |
+| lab 1 | October 11th, 2024 8PM |
+| lab 2 | November 8th, 2024 8PM |
+| lab 3 | December 6th, 2024 8PM |
