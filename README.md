@@ -33,7 +33,9 @@ In the project, there are three batch sizes: 100, 1000, 10000, and the network c
 | Op 1         | 77.53   | 124.01    |
 | Op 2          | 77.63    | 124.30    |
 | Op 3          | 74.65    | 90.28    |
-| **Final**         | **49.42**    | **23.57ms**   |
+| **Final**         | **49.42**    | **23.57**   |
+
+
 Please be reminded that due to the implementation of timing micro, the op time for streaming is not correct. However, I found streaming did not improve the performance by looking at the profile result.
 
 ## Labs
