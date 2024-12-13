@@ -154,6 +154,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc(device_output_ptr, (size_t) Batch * Map_out * Height_out * Width_out * sizeof(float));
     cudaMalloc(device_input_ptr, (size_t) Batch * Channel * Height * Width * sizeof(float));
     cudaMalloc(device_mask_ptr, (size_t) Map_out * Channel * K * K * sizeof(float));
+
+    cudaHostRegister((void*)host_output, (size_t) Batch * Map_out * Height_out * Width_out * sizeof(float), cudaHostRegisterDefault);
+    cudaHostRegister((void*)host_input, (size_t) Batch * Channel * Height * Width * sizeof(float), cudaHostRegisterDefault);
     cudaMemcpy(*device_mask_ptr, host_mask, (size_t) Map_out * Channel * K * K * sizeof(float), cudaMemcpyHostToDevice);
     // float *unrolled_matrix; 
     // float *matmul_output;    
@@ -217,6 +220,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
         cudaStreamSynchronize(streams[i]);
         cudaStreamDestroy(streams[i]);
     }
+
+    cudaHostUnregister((void*)host_input);
+    cudaHostUnregister((void*)host_output);
 
 }
 
