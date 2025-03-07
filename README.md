@@ -1,4 +1,4 @@
-# All works for High Performance Computing Course
+# All works for Parallel Programming Course
 
 The repo includes all my implementation of parallel programming in CUDA. Labs are weekly assignments aiming for practice. The CUDA LeNet is the course final project.
 
